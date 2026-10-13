@@ -25,7 +25,7 @@ with a 404-oracle), fires the payload, and returns command output either via the
 disclosure or by dropping it in public/ and fetching it over HTTP.
 
 Gadget note: the original payload dispatches to ERB#result, which gained an @_init guard
-in Ruby 2.6/2.7 that refuses Marshal-reconstructed ERB objects. This port defaults to the
+in Ruby 2.7 that refuses Marshal-reconstructed ERB objects. This port defaults to the
 ERB#def_module gadget (CVE-2026-41316) which never got the guard; it works on Ruby >= 2.5.
 Pass --classic to force the original ERB#result behaviour.
 """
@@ -244,7 +244,7 @@ def build_erb_gadget_marshal(code: str, classic: bool = False) -> bytes:
     """Marshal graph dispatching into ERB to run `code`.
 
     classic=False -> ERB#def_module (CVE-2026-41316), works on Ruby >= 2.5.
-    classic=True  -> ERB#result (original mpgn payload), Ruby <= 2.5 only.
+    classic=True  -> ERB#result (original mpgn payload), Ruby <= 2.6 only.
     Both ride ActiveSupport::Deprecation::DeprecatedInstanceVariableProxy.
     """
     if classic:

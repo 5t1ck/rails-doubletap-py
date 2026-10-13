@@ -32,10 +32,10 @@ CVE-2019-5418  (Action View file content disclosure)
 ## Why another doubletap?
 
 `mpgn/Rails-doubletap-RCE` is the original proof of concept, and `exploit/multi/http/rails_double_tap`
-is the Metasploit module. Both were written for **Ruby ≤ 2.5** and depend on booting a local
+is the Metasploit module. Both were written for **Ruby ≤ 2.6** and depend on booting a local
 Rails 5 app to borrow ActiveSupport's serialization. Against a modern target they break:
 
-* **`ERB#result` is guarded.** Ruby 2.6/2.7 added an `@_init` check to `ERB#result`/`#run`
+* **`ERB#result` is guarded.** Ruby 2.7 added an `@_init` check to `ERB#result`/`#run`
   that refuses `Marshal`-reconstructed ERB objects, so the classic gadget raises
   `ArgumentError: not initialized`.
 * **They rely on the credential files.** The Metasploit module also guesses the application
@@ -45,6 +45,101 @@ Rails 5 app to borrow ActiveSupport's serialization. Against a modern target the
 This tool reimplements the whole chain in Python (no Ruby runtime, no bundled Rails app),
 defaults to a gadget that survives the `@_init` guard, and automates recon so that only the
 target and the command are needed.
+
+## Supported versions
+
+The chain has three independent requirements; all must hold on the target.
+
+| Component | Vulnerable range | Fixed in |
+| --- | --- | --- |
+| Dev-mode `secret_key_base` (CVE-2019-5420) | Rails **< 5.2.2.1**, **< 6.0.0.beta3**, running in **development/test**, with ActiveStorage present | 5.2.2.1 / 6.0.0.beta3 |
+| Action View file disclosure (CVE-2019-5418) | Action View **< 6.0.0.beta3, < 5.2.2.1, < 5.1.6.2, < 5.0.7.2, < 4.2.11.1** *and* a controller that calls `render file:` with no explicit format | same |
+| Marshal gadget | Ruby **≤ 2.6** for `--classic`; Ruby **≥ 2.5** (incl. 2.7 / 3.x) with an unpatched `erb` for the default gadget | `erb` 4.0.3.1 / 4.0.4.1 / 6.0.1.1 / 6.0.4 |
+
+Additional notes:
+
+* CVE-2019-5420 requires Rails **5.2+** (ActiveStorage). Rails **≤ 5.1** has no
+  `/rails/active_storage/disk` route and is **not** exploitable through this chain.
+* The `@_init` guard in `ERB#result` / `ERB#run` landed in **Ruby 2.7.0**.
+* The `ERB#def_module` guard (CVE-2026-41316) is what the default gadget bypasses; once
+  patched in `erb`, both gadgets are dead.
+* The real determinant on the gadget side is the loaded **`erb` version**, not the Ruby
+  version — an app pinning an old `erb` in its `Gemfile.lock` stays exploitable.
+
+### Verified vs. expected
+
+**Verified working — runtime-tested against a real target:**
+
+| Field | Value |
+| --- | --- |
+| Rails | **5.2.2** |
+| Ruby | **2.7.8** |
+| Environment | development |
+| Gadget | default (`ERB#def_module`) |
+| Key source | dev-mode `MD5("<AppClass>::Application")` |
+| Output mode | web-root (`public/`) exfil |
+| Platform | Linux x86_64 |
+| Result | command execution as the app user (was `root` in our test) |
+
+**Expected to work — derived from upstream code/advisories and unit-tested in isolation, but
+not run end-to-end by us. Verify before relying on it:**
+
+* `--classic` (`ERB#result`) on Ruby ≤ 2.6.
+* The `CVE-2019-5418` file-disclosure path (reading `credentials.yml.enc` + `master.key`) and
+  reflective output capture.
+* Non-development targets (see [When it's not development mode](#when-its-not-development-mode)).
+* Other platforms / OSes.
+
+**Not supported:** Rails ≥ 5.2.2.1 or ≥ 6.0.0.beta3 (key no longer predictable), Rails ≤ 5.1
+(no ActiveStorage disk route), and any target whose `erb` is patched for CVE-2026-41316.
+
+## When it's not development mode
+
+In production the `secret_key_base` is no longer `MD5(app name)`, so the dev-key path cannot
+work. The tool can still succeed **only** if it can recover the real key:
+
+* a `CVE-2019-5418` `render file:` sink must exist, **and**
+* `config/credentials.yml.enc` **and** `config/master.key` must both be readable through it
+  (if the master key is injected as `RAILS_MASTER_KEY` and no `master.key` file is deployed,
+  this fails), **and**
+* the `/rails/active_storage/disk/...` route must be present.
+
+If those hold, the tool discloses and decrypts the credentials, verifies the key with the
+signature oracle, and proceeds exactly as in development. Otherwise it exits with
+`could not determine secret_key_base`.
+
+## When auto-recon fails
+
+Recon reads the development info pages (`/rails/info/properties`, `/rails/info/routes`).
+Those are absent or disabled in production, or when `consider_all_requests_local = false`.
+If recon comes back empty, supply whatever it could not discover:
+
+| Symptom | Override |
+| --- | --- |
+| No file-disclosure sink discovered | `--resource /path` (point at a `render file:` route) |
+| App root / app class name unknown | `--dev-md5 APPCLASS` (development targets) |
+| Key unknown entirely | `--secret-key-base <hex>` |
+| Old target (Ruby ≤ 2.6) | `--classic` |
+| Traffic routed through Burp | `--proxy http://127.0.0.1:8080` |
+
+## Using it as a library
+
+`doubletap.py` is importable; the primitives are usable on their own for custom work:
+
+```python
+import doubletap as dt
+
+# Build and sign your own payload (default = ERB#def_module gadget)
+marshal = dt.build_erb_gadget_marshal("system('id')")
+token   = dt.active_storage_token(secret_key_base, marshal)
+
+# Read an arbitrary file through a CVE-2019-5418 sink
+http = dt.DoubleTap("http://target:3000")
+data = http.accept_read("/some/render-file-route", "etc/passwd")
+
+# Decrypt Rails credentials (Rails EncryptedFile format, AES-128-GCM)
+yaml = dt.decrypt_credentials(enc_blob, master_key_hex)
+```
 
 ## Features
 
@@ -116,7 +211,7 @@ rails.local
 | `--dev-md5 APPCLASS` | Force `MD5("APPCLASS::Application")` as the dev key. |
 | `--resource PATH` | Force the render-file sink route. |
 | `--proxy URL` | Route requests through a proxy (e.g. Burp). |
-| `--classic` | Use the original `ERB#result` gadget (Ruby ≤ 2.5 targets). |
+| `--classic` | Use the original `ERB#result` gadget (Ruby ≤ 2.6 targets). |
 | `--no-cleanup` | Keep the exfiltration file on the target. |
 | `--check-only` | Run recon only; do not exploit. |
 | `--version` | Print version and exit. |
