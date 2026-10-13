@@ -38,13 +38,16 @@ Rails 5 app to borrow ActiveSupport's serialization. Against a modern target the
 * **`ERB#result` is guarded.** Ruby 2.7 added an `@_init` check to `ERB#result`/`#run`
   that refuses `Marshal`-reconstructed ERB objects, so the classic gadget raises
   `ArgumentError: not initialized`.
-* **They rely on the credential files.** The Metasploit module also guesses the application
-  name with `"dir".capitalize`, which does not produce the Ruby module name (`my-app` →
-  `My-app`, not `MyApp`), and expects an HTTP 200 that a successful hit does not return.
+* **The original PoC relies on the target's credential files.** `exploit.rb` discloses
+  `credentials.yml.enc` + `master.key` and takes the key from `credentials.secret_key_base`,
+  so it needs both files to be readable and to carry the key.
+* **The Metasploit module guesses the application name.** With `"dir".capitalize`, which does
+  not produce the Ruby module name (`my-app` → `My-app`, not `MyApp`), and it expects an HTTP
+  200 that a successful hit does not return (the gadget ends in a 500).
 
-This tool reimplements the whole chain in Python (no Ruby runtime, no bundled Rails app),
-defaults to a gadget that survives the `@_init` guard, and automates recon so that only the
-target and the command are needed.
+This tool reimplements the whole chain in Python (no Ruby runtime, no local Rails app to
+boot), defaults to a gadget that survives the `@_init` guard, and automates recon so that
+only the target and the command are needed.
 
 ## Supported versions
 
