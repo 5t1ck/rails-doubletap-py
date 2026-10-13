@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local artifacts / secrets that must never be committed
+*.enc
+master.key
+credentials.yml.enc
+loot.log
+*.bin
+
+# Upstream reference clone (fetched separately, not vendored)
+Rails-doubletap-RCE/
